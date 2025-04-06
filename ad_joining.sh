@@ -117,7 +117,7 @@ sed -i '/^shadow:/c\shadow:     files sss' /etc/nsswitch.conf
 
 # ===== Authselect & Services =====
 authselect select sssd --force 2>> "$AUTHSELECT_ERROR_LOG"
-authselect enable-feature with-mkhomedir --force 2>> "$AUTHSELECT_ERROR_LOG"
+authselect enable-feature with-mkhomedir 2>> "$AUTHSELECT_ERROR_LOG"
 
 systemctl enable --now sssd smb nmb winbind 2>/dev/null
 systemctl restart sssd smb nmb winbind 2>/dev/null
