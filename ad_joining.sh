@@ -2,7 +2,7 @@
 
 # =========================
 # Script: add_rhel_to_domain.sh
-# Author : YOUR NAME HERE
+# Author : Udaya Dhilip
 # Email  : your.email@example.com
 # Date   : $(date +%Y-%m-%d)
 # Purpose: Automatically join RHEL to Active Directory domain

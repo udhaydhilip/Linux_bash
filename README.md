@@ -33,7 +33,7 @@ Skills: Linux, Bash, AWS, Terraform, Ansible, Git, Docker, Kubernetes, Networkin
 
 ## 🧰 Requirements
 
-- RHEL 8+
+- RHEL 9+
 - Root access
 - Domain admin credentials
 
