@@ -1,0 +1,130 @@
+#!/bin/bash
+
+# Ubuntu Desktop to Windows AD Join Script using Winbind (not SSSD)
+# Interactive script to set up domain join
+
+set -e
+
+read -rp "Please enter the Active Directory Domain Name (e.g., test.local): " DOMAIN
+REALM=$(echo "$DOMAIN" | tr '[:lower:]' '[:upper:]')
+WORKGROUP=$(echo "$DOMAIN" | cut -d. -f1 | tr '[:lower:]' '[:upper:]')
+
+read -rp "Please enter the Domain Controller IP: " DC_IP
+
+read -rp "Please enter a Domain User with join rights (e.g., administrator): " AD_ADMIN
+
+read -s -p "Please enter the domain password for $AD_ADMIN@$REALM: " AD_PASS
+echo ""
+
+read -rp "Please enter the desired client hostname (e.g., ubuntu-client): " HOSTNAME
+FQDN="$HOSTNAME.$DOMAIN"
+
+echo "[+] Setting hostname to $FQDN..."
+hostnamectl set-hostname "$FQDN"
+
+echo "[+] Setting DNS to use AD domain controller $DC_IP..."
+cat > /etc/systemd/resolved.conf <<EOF
+[Resolve]
+DNS=$DC_IP
+Domains=$DOMAIN
+EOF
+
+ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf
+systemctl restart systemd-resolved
+
+echo "[+] Installing required packages..."
+apt update
+DEBIAN_FRONTEND=noninteractive apt install -y samba winbind libnss-winbind libpam-winbind krb5-user smbclient vim
+
+echo "[+] Backing up and writing smb.conf..."
+[ -f /etc/samba/smb.conf ] && cp /etc/samba/smb.conf /etc/samba/smb.conf.bak
+
+cat > /etc/samba/smb.conf <<EOF
+[global]
+   workgroup = $WORKGROUP
+   security = ads
+   realm = $REALM
+   kerberos method = secrets and keytab
+   winbind use default domain = true
+   winbind enum users = yes
+   winbind enum groups = yes
+   winbind refresh tickets = yes
+   template shell = /bin/bash
+   template homedir = /home/%U
+   dns proxy = no
+
+   idmap config * : backend = tdb
+   idmap config * : range = 3000-7999
+   idmap config $WORKGROUP : backend = rid
+   idmap config $WORKGROUP : range = 10000-999999
+
+   server role = member server
+EOF
+
+echo "[+] Updating nsswitch.conf..."
+sed -i 's/^passwd:.*/passwd:         compat winbind/' /etc/nsswitch.conf
+sed -i 's/^group:.*/group:          compat winbind/' /etc/nsswitch.conf
+sed -i 's/^shadow:.*/shadow:         compat/' /etc/nsswitch.conf
+
+echo "[+] Updating PAM to create home directories..."
+pam-auth-update --enable mkhomedir
+
+echo "[+] Joining the domain with winbind..."
+echo "$AD_PASS" | net ads join -U "$AD_ADMIN@$REALM"
+
+echo "[+] Restarting and enabling winbind-related services..."
+systemctl restart smbd nmbd winbind
+systemctl enable winbind smbd nmbd
+
+echo "[+] Adding firewall rules for AD communication..."
+ufw allow from "$DC_IP" to any port 88,389,445,135,139 proto tcp
+ufw allow from "$DC_IP" to any port 137,138 proto udp
+ufw reload
+
+echo "[+] Domain join test:"
+wbinfo -u && echo "✔ Winbind sees domain users"
+getent passwd "$WORKGROUP\\$AD_ADMIN" && echo "✔ getent sees domain user"
+
+echo "Removing Ubuntu GUI..."
+sudo systemctl set-default multi-user.target
+sudo apt remove ubuntu-desktop gnome-shell gdm3 -y
+sudo apt autoremove -y
+
+read -rp "Please enter static IP to assign this machine: " CLIENT_IP
+
+read -rp "Please enter subnet prefix (e.g., 24): " PREFIX
+
+read -rp "Please enter default gateway: " GATEWAY
+
+echo "[+] Configuring static IP..."
+
+INTERFACE=$(ip route | grep default | awk '{print $5}')
+NETPLAN_DIR="/etc/netplan"
+NETPLAN_FILE="$NETPLAN_DIR/01-netcfg.yaml"
+
+echo "[+] Cleaning up old Netplan configs..."
+find "$NETPLAN_DIR" -type f -name "*.yaml" ! -name "01-netcfg.yaml" -delete
+
+cat > "$NETPLAN_FILE" <<EOF
+network:
+  version: 2
+  renderer: NetworkManager
+  ethernets:
+    $INTERFACE:
+      dhcp4: no
+      addresses: [$CLIENT_IP/$PREFIX]
+      nameservers:
+        addresses: [$DC_IP]
+      routes:
+        - to: default
+          via: $GATEWAY
+EOF
+
+chmod 600 "$NETPLAN_FILE"
+
+echo "[+] Applying new Netplan configuration..."
+echo "[✔] Static IP and DNS settings applied successfully."
+echo "[⟳] Rebooting system to finalize domain join and network configuration..."
+echo "Close the Terminal & Open with Hostname or newly configured IP"
+netplan apply
+reboot
