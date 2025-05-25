@@ -128,3 +128,5 @@ echo "[⟳] Rebooting system to finalize domain join and network configuration..
 echo "Close the Terminal & Open with Hostname or newly configured IP"
 netplan apply
 reboot
+exit
+exit
